@@ -2,7 +2,7 @@
 
 左にチャット、右にライブプレビューを置き、Claude Design のように HTML/CSS/JS アプリをインタラクティブに開発するツールの UI プロトタイプ。Claude Design からエクスポートした設計バンドルを実装したもの。
 
-**公開URL:** https://ddashpot.github.io/workbench/
+**公開URL:** https://workapps.ddashpot.com/workbench/ （`https://ddashpot.github.io/workbench/` もこのカスタムドメインへ自動リダイレクト）
 
 ## 構成
 - 左ペイン: チャット（モデル選択 + モード切替「プラン / 画面 / ロジック / デバッグ」、ストリーミング、コード適用ボタン、編集・再生成・分岐）
