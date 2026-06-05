@@ -22,18 +22,19 @@
   <script src="src/templates.js"></script>
   <script src="src/api.js"></script>
 
-  <!-- JSX modules: order matters — icons first, then primitives, then panels, then app -->
-  <script type="text/babel" src="src/icons.jsx"></script>
+  <!-- JSX modules (.js so the CDN/edge caches them) — Babel transpiles by type="text/babel".
+       order matters — icons first, then primitives, then panels, then app -->
+  <script type="text/babel" src="src/icons.js"></script>
   <script src="src/integrations.js"></script>
-  <script type="text/babel" src="src/components/Message.jsx"></script>
-  <script type="text/babel" src="src/components/ChatPanel.jsx"></script>
-  <script type="text/babel" src="src/components/PreviewPanel.jsx"></script>
-  <script type="text/babel" src="src/components/TemplateGallery.jsx"></script>
-  <script type="text/babel" src="src/components/FilesPanel.jsx"></script>
-  <script type="text/babel" src="src/components/SettingsPanel.jsx"></script>
-  <script type="text/babel" src="src/components/OAuthModal.jsx"></script>
-  <script type="text/babel" src="src/components/DeployModal.jsx"></script>
-  <script type="text/babel" src="src/components/Chrome.jsx"></script>
-  <script type="text/babel" src="src/app.jsx"></script>
+  <script type="text/babel" src="src/components/Message.js"></script>
+  <script type="text/babel" src="src/components/ChatPanel.js"></script>
+  <script type="text/babel" src="src/components/PreviewPanel.js"></script>
+  <script type="text/babel" src="src/components/TemplateGallery.js"></script>
+  <script type="text/babel" src="src/components/FilesPanel.js"></script>
+  <script type="text/babel" src="src/components/SettingsPanel.js"></script>
+  <script type="text/babel" src="src/components/OAuthModal.js"></script>
+  <script type="text/babel" src="src/components/DeployModal.js"></script>
+  <script type="text/babel" src="src/components/Chrome.js"></script>
+  <script type="text/babel" src="src/app.js"></script>
 </body>
 </html>
