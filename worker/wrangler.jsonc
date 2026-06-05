@@ -1,0 +1,16 @@
+{
+  // Cloudflare Worker: GitHub OAuth token exchange for Workbench.
+  // Deploy:  cd worker && npx wrangler deploy
+  // Secret:  npx wrangler secret put GITHUB_CLIENT_SECRET
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "workbench-oauth",
+  "main": "src/index.js",
+  "compatibility_date": "2025-06-01",
+  "observability": { "enabled": true },
+  "vars": {
+    // Public OAuth App client id (owner: ddashpot). NOT a secret.
+    "GITHUB_CLIENT_ID": "Ov23lijkzJqAyqKoVt4C"
+  }
+  // GITHUB_CLIENT_SECRET is a SECRET — never put it here. Set it with:
+  //   npx wrangler secret put GITHUB_CLIENT_SECRET
+}

@@ -32,6 +32,7 @@ function App() {
   const [mobilePreviewH, setMobilePreviewH] = useState(() => Number(localStorage.getItem("wb.mobileH")) || 42);
   const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem("wb.customPrompt") || "");
   const [showOAuth, setShowOAuth] = useState(false);
+  const [ghConnecting, setGhConnecting] = useState(false);
 
   // Toasts
   const [toasts, setToasts] = useState([]);
@@ -71,6 +72,22 @@ function App() {
   useEffect(() => {
     if (project) localStorage.setItem("wb.project", JSON.stringify(project));
   }, [project]);
+
+  // Handle the GitHub OAuth redirect callback (?code=…) once on load.
+  useEffect(() => {
+    if (!window.GitHubAuth.hasPendingCallback()) return;
+    setGhConnecting(true);
+    window.GitHubAuth.handleCallback()
+      .then((s) => {
+        if (s) toast({ kind: "success",
+          title: language === "ja" ? "GitHubと接続しました" : "Signed in to GitHub",
+          msg: "@" + s.user.login });
+      })
+      .catch((e) => toast({ kind: "error",
+        title: language === "ja" ? "GitHub接続に失敗" : "GitHub sign-in failed",
+        msg: e.message || String(e) }))
+      .finally(() => setGhConnecting(false));
+  }, []);
 
   // Console listener
   useEffect(() => {
@@ -393,6 +410,7 @@ function App() {
         </div>
         <StatusBar t={t} model={model} status="ready" busy={false} files={project?.files || {}} />
         <ToastStack toasts={toasts} />
+        {ghConnecting && <GhConnecting language={language} />}
       </div>
     );
   }
@@ -516,6 +534,23 @@ function App() {
           }}
         />
       )}
+      {ghConnecting && <GhConnecting language={language} />}
+    </div>
+  );
+}
+
+function GhConnecting({ language }) {
+  return (
+    <div className="modal-backdrop">
+      <div className="oauth-body oauth-loading" style={{ background: "var(--bg-1)", border: "1px solid var(--border-strong)", borderRadius: "var(--r-md)", padding: "28px 36px" }}>
+        <div className="oauth-spinner" />
+        <div className="oauth-loading-text">
+          {language === "ja" ? "GitHubと接続しています…" : "Connecting to GitHub…"}
+        </div>
+        <div className="oauth-loading-sub">
+          {language === "ja" ? "トークンを交換中" : "Exchanging token"}
+        </div>
+      </div>
     </div>
   );
 }

@@ -3,21 +3,31 @@
    Real APIs not wired yet — these simulate the UX so the panels feel real. */
 
 /* ===== GitHub OAuth config =====
-   In a real deployment, set OAUTH_CLIENT_ID and host a server endpoint that
-   exchanges the `code` for an access token (the client_secret stays server-side).
-   Here we simulate the entire flow client-side so the UX is realistic. */
+   CLIENT_ID is a REAL, registered GitHub OAuth App client id (it is public —
+   safe to ship in client code). The CLIENT SECRET is NOT here and must never be:
+   it lives only in the server-side token-exchange endpoint (TOKEN_ENDPOINT).
+
+   A pure static site cannot finish the OAuth Authorization Code flow on its own
+   (GitHub blocks browser CORS on the token endpoint and OAuth Apps don't support
+   PKCE), so completion still runs as a client-side simulation below until a real
+   backend at TOKEN_ENDPOINT is deployed. To go fully real:
+     1. On the OAuth App page, set the Authorization callback URL to REDIRECT_URI.
+     2. Generate a client secret and store it in the backend (e.g. Cloudflare Worker).
+     3. Point TOKEN_ENDPOINT at that backend and replace GitHubAuth.completeAuthorize. */
 window.GITHUB_OAUTH = {
-  CLIENT_ID: "Iv1.workbench-demo-client",
+  CLIENT_ID: "Ov23lijkzJqAyqKoVt4C", // real OAuth App (owner: ddashpot)
   REDIRECT_URI: window.location.origin + window.location.pathname,
   SCOPES: ["repo", "delete_repo", "read:user", "user:email"],
-  TOKEN_ENDPOINT: "/api/github/token", // real backend would live here
+  TOKEN_ENDPOINT: "https://workbench-oauth.ikymbiz.workers.dev/api/github/token", // Cloudflare Worker (exchanges code -> token server-side)
   AUTHORIZE_URL: "https://github.com/login/oauth/authorize",
 };
 
-/* In-memory token store (mirrors the pasted-code's "memory only" pattern).
-   Token persists for the current tab only (sessionStorage). */
+/* Real GitHub OAuth (Authorization Code flow).
+   Token persists for the current tab only (sessionStorage) — closing the tab
+   signs out, which keeps the access token out of long-lived storage. */
 window.GitHubAuth = {
   KEY: "wb.gh.session",
+  STATE_KEY: "wb.gh.state",
   get() {
     try { return JSON.parse(sessionStorage.getItem(this.KEY)) || null; } catch (_) { return null; }
   },
@@ -29,29 +39,85 @@ window.GitHubAuth = {
     sessionStorage.removeItem(this.KEY);
     window.dispatchEvent(new CustomEvent("wb-gh-auth-change", { detail: null }));
   },
-  /* Generates a fake state token for CSRF protection (the real flow would
-     check this matches in the OAuth callback). */
-  beginAuthorize() {
-    const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    sessionStorage.setItem("wb.gh.state", state);
-    return state;
+
+  /* True when the current page load is an OAuth redirect back from GitHub. */
+  hasPendingCallback() {
+    return new URLSearchParams(window.location.search).has("code");
   },
-  /* In a real flow this would hit `${TOKEN_ENDPOINT}` with the `code`.
-     Here we mint a fake token and resolve after a short delay so the loading
-     state is visible. */
-  async completeAuthorize({ code, state }) {
-    const expected = sessionStorage.getItem("wb.gh.state");
-    if (expected && state !== expected) throw new Error("OAuth state mismatch");
-    sessionStorage.removeItem("wb.gh.state");
-    await new Promise((r) => setTimeout(r, 600 + Math.random() * 400));
+
+  /* Step 1: send the whole tab to GitHub's real consent screen. */
+  redirectToAuthorize() {
+    const cfg = window.GITHUB_OAUTH;
+    const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem(this.STATE_KEY, state);
+    const url = `${cfg.AUTHORIZE_URL}?client_id=${encodeURIComponent(cfg.CLIENT_ID)}`
+      + `&redirect_uri=${encodeURIComponent(cfg.REDIRECT_URI)}`
+      + `&scope=${encodeURIComponent(cfg.SCOPES.join(" "))}`
+      + `&state=${encodeURIComponent(state)}`
+      + `&allow_signup=false`;
+    window.location.assign(url);
+  },
+
+  _cleanUrl() {
+    const clean = window.location.origin + window.location.pathname + window.location.hash;
+    window.history.replaceState({}, document.title, clean);
+  },
+
+  /* Step 2 (on return): exchange ?code -> access_token via the backend, then
+     fetch the real GitHub user. Throws on any failure; always cleans the URL. */
+  async handleCallback() {
+    const cfg = window.GITHUB_OAUTH;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    const ghError = params.get("error");
+    if (!code) {
+      if (ghError) { this._cleanUrl(); throw new Error(params.get("error_description") || ghError); }
+      return null;
+    }
+    const expected = sessionStorage.getItem(this.STATE_KEY);
+    sessionStorage.removeItem(this.STATE_KEY);
+    if (!expected || state !== expected) { this._cleanUrl(); throw new Error("OAuth state mismatch"); }
+
+    let res;
+    try {
+      res = await fetch(cfg.TOKEN_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, redirect_uri: cfg.REDIRECT_URI }),
+      });
+    } catch (e) {
+      this._cleanUrl();
+      throw new Error("Could not reach token endpoint (" + cfg.TOKEN_ENDPOINT + "). Is the backend deployed?");
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) { this._cleanUrl(); throw new Error(data.error_description || data.error || ("Token exchange failed: " + res.status)); }
+    const token = data.access_token;
+    if (!token) { this._cleanUrl(); throw new Error("No access_token returned from backend"); }
+
+    let u = {};
+    try {
+      const ures = await fetch("https://api.github.com/user", {
+        headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" },
+      });
+      u = await ures.json();
+    } catch (_) { /* identity fetch best-effort */ }
+
+    const login = u.login || "github-user";
     const session = {
-      token: "gho_" + Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 14),
-      user: window.MOCK_GITHUB.user,
-      scopes: window.GITHUB_OAUTH.SCOPES,
+      token,
+      user: {
+        login,
+        name: u.name || login,
+        avatar: login.charAt(0).toUpperCase(),
+        avatarUrl: u.avatar_url || null,
+        htmlUrl: u.html_url || ("https://github.com/" + login),
+      },
+      scopes: data.scope ? data.scope.split(",") : cfg.SCOPES,
       issuedAt: Date.now(),
-      expiresIn: 8 * 60 * 60 * 1000, // 8h
     };
     this.set(session);
+    this._cleanUrl();
     return session;
   },
 };
