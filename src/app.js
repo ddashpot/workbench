@@ -35,6 +35,9 @@ function App() {
   const [ghConnecting, setGhConnecting] = useState(false);
   const [diskProjects, setDiskProjects] = useState([]); // [{name, mtime}]
   const [activeProject, setActiveProject] = useState(null);
+  const [promptLayers, setPromptLayers] = useState({ app: "", defaultApp: "", global: "", project: "" });
+  const [skillsAvail, setSkillsAvail] = useState([]);   // [{name, desc}]
+  const [skillsEnabled, setSkillsEnabled] = useState([]); // [name]
 
   // Toasts
   const [toasts, setToasts] = useState([]);
@@ -132,6 +135,11 @@ function App() {
       } else if (m.type === "projects") {
         setDiskProjects(m.list || []);
         setActiveProject(m.active || null);
+      } else if (m.type === "prompts") {
+        setPromptLayers({ app: m.app || "", defaultApp: m.defaultApp || "", global: m.global || "", project: m.project || "" });
+      } else if (m.type === "skills") {
+        setSkillsAvail(m.available || []);
+        setSkillsEnabled(m.enabled || []);
       } else if (m.type === "error") {
         toast({ kind: "error", title: "Agent", msg: m.message });
       } else if (m.type === "notice") {
@@ -159,6 +167,19 @@ function App() {
     setSideOpen(null);
     setLogs([]);
     setIframeKey((k) => k + 1);
+  }
+
+  // ---- layered prompts & skills -----------------------------------------
+  function savePrompts(next) {
+    window.__wbBridge.send({ type: "set_prompts", app: next.app, global: next.global, project: next.project });
+    toast({ kind: "success", title: language === "ja" ? "プロンプトを保存" : "Prompts saved", msg: "" });
+  }
+  function toggleSkill(name) {
+    setSkillsEnabled((cur) => {
+      const next = cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name];
+      window.__wbBridge.send({ type: "set_skills", names: next });
+      return next;
+    });
   }
 
   // Mirror the layered prompt inputs to the backend (writes project CLAUDE.md).
@@ -510,6 +531,16 @@ function App() {
               <path d="M2.5 5.5l1.6-2.2a1 1 0 01.8-.4h3.1a1 1 0 01.8.4l1 1.4" />
             </svg>
           </button>
+          <button
+            className={"sb-btn " + (sideOpen === "prompts" ? "on" : "")}
+            onClick={() => { if (sideOpen !== "prompts") { window.__wbBridge.send({ type: "get_prompts" }); window.__wbBridge.send({ type: "list_skills" }); } setSideOpen(sideOpen === "prompts" ? null : "prompts"); }}
+            title={language === "ja" ? "プロンプト & スキル" : "Prompts & Skills"}
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <path d="M4 3.5h7l3 3v8a1 1 0 01-1 1H4a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+              <path d="M6 8.5h6M6 11h6M6 6h3" />
+            </svg>
+          </button>
           <button className={"sb-btn " + (sideOpen === "files" ? "on" : "")} onClick={() => setSideOpen(sideOpen === "files" ? null : "files")} title={t("files")}>
             <Icon name="folder" />
           </button>
@@ -539,6 +570,17 @@ function App() {
             active={activeProject}
             onOpen={openDiskProject}
             onCreate={createDiskProject}
+            onClose={() => setSideOpen(null)}
+          />
+        )}
+        {sideOpen === "prompts" && (
+          <PromptsPanel
+            language={language}
+            layers={promptLayers}
+            skillsAvail={skillsAvail}
+            skillsEnabled={skillsEnabled}
+            onSave={savePrompts}
+            onToggleSkill={toggleSkill}
             onClose={() => setSideOpen(null)}
           />
         )}
@@ -618,6 +660,73 @@ function App() {
         />
       )}
       {ghConnecting && <GhConnecting language={language} />}
+    </div>
+  );
+}
+
+function PromptsPanel({ language, layers, skillsAvail, skillsEnabled, onSave, onToggleSkill, onClose }) {
+  const ja = language === "ja";
+  const [app, setApp] = useState(layers.app || "");
+  const [glob, setGlob] = useState(layers.global || "");
+  const [proj, setProj] = useState(layers.project || "");
+  const [showApp, setShowApp] = useState(false);
+  const [q, setQ] = useState("");
+  // re-sync when the active project / backend values change
+  useEffect(() => { setApp(layers.app || ""); setGlob(layers.global || ""); setProj(layers.project || ""); },
+    [layers.app, layers.global, layers.project]);
+
+  const ta = { width: "100%", minHeight: 70, background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 4, padding: "8px 10px", color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: 12, marginBottom: 4 };
+  const lab = { display: "block", fontSize: 10, color: "var(--fg-muted)", textTransform: "uppercase", letterSpacing: ".06em", margin: "10px 0 4px" };
+  const filtered = skillsAvail.filter((s) => !q || s.name.includes(q) || (s.desc || "").toLowerCase().includes(q.toLowerCase()));
+
+  return (
+    <div className="files-panel">
+      <div className="hp-head">
+        <span className="hp-title">{ja ? "プロンプト & スキル" : "Prompts & Skills"}</span>
+        <button className="fp-btn small" onClick={onClose} title="close"><Icon name="close" size={12} /></button>
+      </div>
+      <div className="fp-body" style={{ padding: "10px 12px" }}>
+        <label style={lab}>{ja ? "プロジェクト全体（共通）" : "Global (all projects)"}</label>
+        <textarea style={ta} value={glob} onChange={(e) => setGlob(e.target.value)} placeholder={ja ? "全プロジェクト共通の方針…" : "Shared across all projects…"} />
+
+        <label style={lab}>{ja ? "このプロジェクト" : "This project"}</label>
+        <textarea style={ta} value={proj} onChange={(e) => setProj(e.target.value)} placeholder={ja ? "このプロジェクト固有の指示…" : "Instructions for this project…"} />
+
+        <button className="fp-btn ghost" style={{ marginTop: 6 }} onClick={() => setShowApp((s) => !s)}>
+          {showApp ? "▾ " : "▸ "}{ja ? "アプリ既定（高度）" : "App default (advanced)"}
+        </button>
+        {showApp && (
+          <>
+            <textarea style={ta} value={app} onChange={(e) => setApp(e.target.value)} placeholder={layers.defaultApp} />
+            <div style={{ fontSize: 10, color: "var(--fg-dim)" }}>{ja ? "空欄なら既定を使用。" : "Blank = use the built-in default."}</div>
+          </>
+        )}
+
+        <button className="fp-btn primary" style={{ marginTop: 10, width: "100%" }} onClick={() => onSave({ app, global: glob, project: proj })}>
+          {ja ? "プロンプトを保存" : "Save prompts"}
+        </button>
+
+        <label style={lab}>{ja ? `スキル取込（${skillsEnabled.length} / ${skillsAvail.length}）` : `Skills (${skillsEnabled.length} / ${skillsAvail.length})`}</label>
+        <input
+          value={q} onChange={(e) => setQ(e.target.value)} placeholder={ja ? "スキルを検索…" : "Search skills…"}
+          style={{ width: "100%", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 4, padding: "6px 8px", color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: 12, marginBottom: 6 }}
+        />
+        <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 4 }}>
+          {filtered.length === 0 && <div className="fp-empty">{ja ? "該当なし" : "No matches"}</div>}
+          {filtered.map((s) => {
+            const on = skillsEnabled.includes(s.name);
+            return (
+              <label key={s.name} style={{ display: "grid", gridTemplateColumns: "16px 1fr", gap: 8, padding: "7px 10px", borderBottom: "1px solid var(--border)", cursor: "pointer", alignItems: "start" }}>
+                <input type="checkbox" checked={on} onChange={() => onToggleSkill(s.name)} style={{ marginTop: 2 }} />
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 12, color: on ? "var(--accent)" : "var(--fg)", fontFamily: "var(--font-mono)" }}>{s.name}</span>
+                  {s.desc && <span style={{ display: "block", fontSize: 10, color: "var(--fg-muted)", lineHeight: 1.4, marginTop: 2 }}>{s.desc}</span>}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

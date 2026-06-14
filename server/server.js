@@ -44,6 +44,29 @@ let CUSTOM = "";
 let LANG = "ja";
 let TARGET = "pc";
 
+// Persistent prompt/skill config: { app, global, projects: { name: { prompt, skills:[] } } }
+const CONFIG_DIR = path.join(PROJECTS_ROOT, ".workbench");
+const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
+const SKILLS_DIR = path.resolve(path.join(STATIC_ROOT, "..", "skills"));
+const DEFAULT_APP_PROMPT = `This is a single-page web app shown in a live preview. Keep the project as exactly three files at the project root and edit them in place:
+- index.html  (must link styles.css and app.js)
+- styles.css
+- app.js
+Do not add a build step, frameworks, or extra files unless explicitly asked.`;
+
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) || {}; } catch (_) { return {}; }
+}
+function saveConfig() {
+  try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); fs.writeFileSync(CONFIG_PATH, JSON.stringify(CONFIG, null, 2)); } catch (_) {}
+}
+let CONFIG = loadConfig();
+function projCfg(name) {
+  CONFIG.projects = CONFIG.projects || {};
+  CONFIG.projects[name] = CONFIG.projects[name] || {};
+  return CONFIG.projects[name];
+}
+
 // Write the MCP config that points Claude Code at our permission server.
 const MCP_CONFIG_PATH = path.join(os.tmpdir(), `wb-ui-mcp-${PORT}.json`);
 fs.writeFileSync(
@@ -84,26 +107,76 @@ function pushFiles() {
 }
 const EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Update"]);
 
-// ---- CLAUDE.md (layered prompt) -------------------------------------------
-function writeClaudeMd() {
+// ---- layered prompt -> CLAUDE.md ------------------------------------------
+function composedClaudeMd(name) {
   const lang = LANG === "ja" ? "日本語" : "English";
   const target = TARGET === "mobile"
     ? "Mobile (portrait, ~390px). Mobile-first, large touch targets."
     : "Desktop. Wider grids and hover states.";
-  const body = `# Workbench project — agent instructions
+  const cfg = projCfg(name);
+  const app = (CONFIG.app && CONFIG.app.trim()) ? CONFIG.app.trim() : DEFAULT_APP_PROMPT;
+  const global = (CONFIG.global || "").trim();
+  const project = (cfg.prompt || "").trim();
+  const skills = cfg.skills || [];
+  let md = `# Project instructions (managed by Workbench — do not hand-edit)\n\n`;
+  md += `## App\n${app}\n\nExplain your work in ${lang}. Target form factor: ${target}\n`;
+  if (global) md += `\n## Global (applies to all your projects)\n${global}\n`;
+  if (project) md += `\n## This project\n${project}\n`;
+  if (CUSTOM && CUSTOM.trim()) md += `\n## Notes\n${CUSTOM.trim()}\n`;
+  if (skills.length) md += `\n## Enabled skills\nThese skills are available under .claude/skills/ — use them when relevant:\n${skills.map((s) => "- " + s).join("\n")}\n`;
+  return md;
+}
+function writeClaudeMd() {
+  try { fs.writeFileSync(path.join(WORKDIR, "CLAUDE.md"), composedClaudeMd(activeName())); } catch (_) {}
+}
+function sendPrompts() {
+  const cfg = projCfg(activeName());
+  sendUI({ type: "prompts", app: CONFIG.app || "", defaultApp: DEFAULT_APP_PROMPT, global: CONFIG.global || "", project: cfg.prompt || "" });
+}
 
-This is a single-page web app previewed live. Keep the project as exactly three
-files at the project root and edit them in place:
-
-- index.html  — must link styles.css via <link rel="stylesheet" href="styles.css">
-                and app.js via <script src="app.js"></script>
-- styles.css
-- app.js
-
-Do not add a build step, frameworks, or extra files unless explicitly asked.
-Explain your work in ${lang}. Target form factor: ${target}
-${CUSTOM ? `\n## Additional rules from the user\n${CUSTOM}\n` : ""}`;
-  try { fs.writeFileSync(path.join(WORKDIR, "CLAUDE.md"), body); } catch (_) {}
+// ---- skills (import from the shared skills/ catalog) -----------------------
+function skillDesc(p) {
+  try {
+    const txt = fs.readFileSync(p, "utf8");
+    const m = txt.match(/^description:\s*(.+)$/mi);
+    if (m) return m[1].replace(/^["']|["']$/g, "").trim().slice(0, 160);
+    const line = txt.split("\n").find((l) => l.trim() && !l.startsWith("---") && !l.startsWith("name:"));
+    return (line || "").replace(/^#+\s*/, "").slice(0, 160);
+  } catch (_) { return ""; }
+}
+function listSkills() {
+  try {
+    return fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && fs.existsSync(path.join(SKILLS_DIR, d.name, "SKILL.md")))
+      .map((d) => ({ name: d.name, desc: skillDesc(path.join(SKILLS_DIR, d.name, "SKILL.md")) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (_) { return []; }
+}
+function sendSkills() {
+  sendUI({ type: "skills", available: listSkills(), enabled: projCfg(activeName()).skills || [] });
+}
+// Manual recursive copy — fs.cpSync segfaults on this OneDrive/Unicode path.
+function copyDirSafe(src, dst, depth) {
+  if (depth > 8) return;
+  let entries;
+  try { entries = fs.readdirSync(src, { withFileTypes: true }); } catch (_) { return; }
+  try { fs.mkdirSync(dst, { recursive: true }); } catch (_) {}
+  for (const e of entries) {
+    if (e.isSymbolicLink && e.isSymbolicLink()) continue; // skip symlinks
+    const s = path.join(src, e.name);
+    const d = path.join(dst, e.name);
+    if (e.isDirectory()) copyDirSafe(s, d, depth + 1);
+    else if (e.isFile()) { try { fs.copyFileSync(s, d); } catch (_) {} }
+  }
+}
+function applySkills(name) {
+  const enabled = projCfg(name).skills || [];
+  const dest = path.join(PROJECTS_ROOT, name, ".claude", "skills");
+  try { fs.rmSync(dest, { recursive: true, force: true }); } catch (_) {}
+  for (const s of enabled) {
+    const src = path.join(SKILLS_DIR, s);
+    if (fs.existsSync(src)) copyDirSafe(src, path.join(dest, s), 0);
+  }
 }
 
 // ---- project management ---------------------------------------------------
@@ -181,6 +254,7 @@ function switchTo(dir, activeProjectName) {
   sendUI({ type: "workdir", workdir: WORKDIR });
   sendUI({ type: "session", sessionId: null });
   sendProjects();
+  sendPrompts();
   pushFiles();
 }
 
@@ -250,6 +324,7 @@ wss.on("connection", (socket) => {
   ws = socket;
   sendUI({ type: "ready", workdir: WORKDIR, model: MODEL || "default", sessionId });
   sendProjects();
+  sendPrompts();
   pushFiles(); // mirror whatever is already on disk
 
   socket.on("message", (raw) => {
@@ -272,6 +347,23 @@ wss.on("connection", (socket) => {
       case "list_projects": sendProjects(); break;
       case "create_project": createProject(msg.name); break;
       case "open_project": openProject(msg.name); break;
+      case "get_prompts": sendPrompts(); break;
+      case "set_prompts":
+        CONFIG.app = msg.app || "";
+        CONFIG.global = msg.global || "";
+        projCfg(activeName()).prompt = msg.project || "";
+        saveConfig();
+        writeClaudeMd();
+        sendPrompts();
+        break;
+      case "list_skills": sendSkills(); break;
+      case "set_skills":
+        projCfg(activeName()).skills = Array.isArray(msg.names) ? msg.names : [];
+        saveConfig();
+        applySkills(activeName());
+        writeClaudeMd();
+        sendSkills();
+        break;
       case "set_custom":
         CUSTOM = msg.text || "";
         if (msg.language) LANG = msg.language;
