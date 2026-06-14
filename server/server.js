@@ -272,6 +272,68 @@ function openProject(name) {
   switchTo(dir, path.basename(dir));
 }
 
+// ---- save to GitHub (via the user's local git + gh auth) ------------------
+function runCmd(cmd, args, cwd) {
+  return new Promise((resolve) => {
+    let out = "", err = "";
+    let child;
+    try { child = spawn(cmd, args, { cwd, env: childEnv(), stdio: ["ignore", "pipe", "pipe"] }); }
+    catch (e) { resolve({ code: -1, out, err: String(e.message || e) }); return; }
+    child.stdout.setEncoding("utf8"); child.stdout.on("data", (d) => { out += d; });
+    child.stderr.setEncoding("utf8"); child.stderr.on("data", (d) => { err += d; });
+    child.on("error", (e) => resolve({ code: -1, out, err: String(e.message || e) }));
+    child.on("close", (code) => resolve({ code, out, err }));
+  });
+}
+
+async function saveGithub(opts) {
+  const dir = WORKDIR;
+  const name = activeName();
+  const repoName = (opts.repo && opts.repo.trim()) || name;
+  const br = (opts.branch && opts.branch.trim()) || "main";
+  const msg = (opts.message && opts.message.trim()) || ("Update " + name + " from Workbench");
+  const vis = opts.visibility === "public" ? "--public" : "--private";
+  const say = (text, kind) => sendUI({ type: "save_log", text, kind: kind || "" });
+  const fail = (text) => { say(text, "error"); sendUI({ type: "save_done", ok: false }); };
+
+  sendUI({ type: "save_start" });
+  // 1. require GitHub login
+  let r = await runCmd("gh", ["auth", "status"], dir);
+  if (r.code !== 0) { fail("GitHub にログインしていません。ターミナルで `gh auth login` を実行してください。"); return; }
+  const who = await runCmd("gh", ["api", "user", "-q", ".login"], dir);
+  const login = (who.out || "").trim();
+  if (!login) { fail("GitHub ユーザーを取得できませんでした。"); return; }
+  say(`✓ GitHub: @${login}`, "ok");
+
+  // 2. local git commit
+  if (!fs.existsSync(path.join(dir, ".git"))) { await runCmd("git", ["init", "-b", br], dir); say("✓ git init", "ok"); }
+  await runCmd("git", ["add", "-A"], dir);
+  const commit = await runCmd("git", [
+    "-c", "user.name=" + login, "-c", "user.email=" + login + "@users.noreply.github.com",
+    "commit", "-m", msg
+  ], dir);
+  if (commit.code === 0) say("✓ commit", "ok");
+  else say("（コミット対象なし、または: " + (commit.out || commit.err).split("\n")[0] + "）");
+
+  // 3. ensure remote repo + push
+  const full = login + "/" + repoName;
+  const view = await runCmd("gh", ["repo", "view", full], dir);
+  if (view.code !== 0) {
+    say("新規リポジトリを作成: " + full);
+    const cr = await runCmd("gh", ["repo", "create", full, vis, "--source", ".", "--remote", "origin", "--push"], dir);
+    if (cr.code !== 0) { fail("作成に失敗: " + (cr.err || cr.out).slice(0, 300)); return; }
+  } else {
+    const rem = await runCmd("git", ["remote"], dir);
+    if (!(rem.out || "").split(/\s+/).includes("origin")) {
+      await runCmd("git", ["remote", "add", "origin", "https://github.com/" + full + ".git"], dir);
+    }
+    const push = await runCmd("git", ["push", "-u", "origin", "HEAD:" + br], dir);
+    if (push.code !== 0) { fail("push に失敗: " + (push.err || push.out).slice(0, 300)); return; }
+  }
+  say("✓ GitHub に保存しました", "ok");
+  sendUI({ type: "save_done", ok: true, url: "https://github.com/" + full, repo: full });
+}
+
 // ---- static file serving --------------------------------------------------
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -356,6 +418,7 @@ wss.on("connection", (socket) => {
         writeClaudeMd();
         sendPrompts();
         break;
+      case "save_github": saveGithub(msg); break;
       case "list_skills": sendSkills(); break;
       case "set_skills":
         projCfg(activeName()).skills = Array.isArray(msg.names) ? msg.names : [];

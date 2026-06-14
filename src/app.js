@@ -140,6 +140,11 @@ function App() {
       } else if (m.type === "skills") {
         setSkillsAvail(m.available || []);
         setSkillsEnabled(m.enabled || []);
+      } else if (m.type === "save_log") {
+        toast({ kind: m.kind === "error" ? "error" : "success", title: "GitHub", msg: m.text });
+      } else if (m.type === "save_done") {
+        if (m.ok) toast({ kind: "success", title: language === "ja" ? "GitHubに保存しました" : "Saved to GitHub", msg: m.repo || "" });
+        else toast({ kind: "error", title: language === "ja" ? "GitHub保存に失敗" : "GitHub save failed", msg: "" });
       } else if (m.type === "error") {
         toast({ kind: "error", title: "Agent", msg: m.message });
       } else if (m.type === "notice") {
@@ -180,6 +185,10 @@ function App() {
       window.__wbBridge.send({ type: "set_skills", names: next });
       return next;
     });
+  }
+  function saveToGithub(opts) {
+    window.__wbBridge.send({ type: "save_github", ...opts });
+    toast({ kind: "success", title: "GitHub", msg: language === "ja" ? "保存を開始…" : "Saving…" });
   }
 
   // Mirror the layered prompt inputs to the backend (writes project CLAUDE.md).
@@ -570,6 +579,7 @@ function App() {
             active={activeProject}
             onOpen={openDiskProject}
             onCreate={createDiskProject}
+            onSaveGithub={saveToGithub}
             onClose={() => setSideOpen(null)}
           />
         )}
@@ -731,9 +741,17 @@ function PromptsPanel({ language, layers, skillsAvail, skillsEnabled, onSave, on
   );
 }
 
-function ProjectsPanel({ language, projects, active, onOpen, onCreate, onClose }) {
+function ProjectsPanel({ language, projects, active, onOpen, onCreate, onSaveGithub, onClose }) {
   const [name, setName] = useState("");
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [repo, setRepo] = useState(active || "");
+  const [vis, setVis] = useState("private");
+  const [msg, setMsg] = useState("");
+  useEffect(() => { setRepo(active || ""); }, [active]);
   function submit() { const v = name.trim(); if (!v) return; onCreate(v); setName(""); }
+  function doSave() { onSaveGithub({ repo: repo.trim() || active, visibility: vis, message: msg.trim() }); }
+  const ja = language === "ja";
+  const inp = { flex: 1, minWidth: 0, background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 4, padding: "6px 8px", color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: 12 };
   return (
     <div className="files-panel">
       <div className="hp-head">
@@ -765,6 +783,23 @@ function ProjectsPanel({ language, projects, active, onOpen, onCreate, onClose }
             </li>
           ))}
         </ul>
+      </div>
+      <div style={{ borderTop: "1px solid var(--border)", padding: "10px 12px" }}>
+        <button className="fp-btn" style={{ width: "100%" }} onClick={() => setSaveOpen((s) => !s)} disabled={!active}>
+          {(saveOpen ? "▾ " : "▸ ") + (ja ? "GitHubに保存" : "Save to GitHub")}
+        </button>
+        {saveOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+            <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder={ja ? "リポジトリ名" : "repo name"} style={inp} />
+            <select value={vis} onChange={(e) => setVis(e.target.value)} style={inp}>
+              <option value="private">private</option>
+              <option value="public">public</option>
+            </select>
+            <input value={msg} onChange={(e) => setMsg(e.target.value)} placeholder={ja ? "コミットメッセージ（任意）" : "commit message (optional)"} style={inp} />
+            <button className="fp-btn primary" onClick={doSave}>{ja ? "保存（commit & push）" : "Save (commit & push)"}</button>
+            <div style={{ fontSize: 10, color: "var(--fg-dim)" }}>{ja ? "ローカルの gh ログインを使用（要 `gh auth login`）。" : "Uses your local gh login (run `gh auth login`)."}</div>
+          </div>
+        )}
       </div>
     </div>
   );
