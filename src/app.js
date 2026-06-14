@@ -111,6 +111,43 @@ function App() {
     return () => window.removeEventListener("message", onMsg);
   }, []);
 
+  // Backend bridge: agent edits on disk -> mirror into the UI; permission gate.
+  useEffect(() => {
+    const off = window.__wbBridge.on((m) => {
+      if (m.type === "files_changed") {
+        const files = m.files || {};
+        if (!Object.keys(files).length) return;
+        setProject((p) => (p ? { ...p, files: { ...p.files, ...files } } : p));
+        setIframeKey((k) => k + 1);
+      } else if (m.type === "permission_request") {
+        setProject((p) => p ? { ...p, messages: [...(p.messages || []), {
+          id: "perm_" + m.id, permId: m.id, role: "assistant", kind: "gate",
+          tool_name: m.tool_name, input: m.input, ts: Date.now(), resolved: null,
+        }] } : p);
+      } else if (m.type === "permission_resolved") {
+        setProject((p) => p ? { ...p, messages: (p.messages || []).map((x) =>
+          x.permId === m.id && x.resolved == null ? { ...x, resolved: m.decision } : x) } : p);
+      } else if (m.type === "error") {
+        toast({ kind: "error", title: "Agent", msg: m.message });
+      } else if (m.type === "notice") {
+        toast({ kind: "success", title: "Agent", msg: m.text });
+      }
+    });
+    return off;
+  }, []);
+
+  // Mirror the layered prompt inputs to the backend (writes project CLAUDE.md).
+  useEffect(() => {
+    window.wbSetCustom({ text: customPrompt, language, target });
+  }, [customPrompt, language, target]);
+
+  // Operator's allow/deny on a permission gate.
+  function onPermission(permId, decision) {
+    window.wbSendPermission(permId, decision);
+    setProject((p) => p ? { ...p, messages: (p.messages || []).map((x) =>
+      x.permId === permId && x.resolved == null ? { ...x, resolved: decision } : x) } : p);
+  }
+
   // ---- Project actions --------------------------------------------------
   function pickTemplate(tpl) {
     const v0 = {
@@ -497,6 +534,7 @@ function App() {
             onRegenLast={onRegenLast}
             onBranchFrom={onBranchFrom}
             onApplyBlock={onApplyBlock}
+            onPermission={onPermission}
             files={project.files}
             model={model} setModel={setModel}
             busy={busy} onStop={onStop}

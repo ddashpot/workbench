@@ -7,7 +7,7 @@ window.ChatPanel = function (props) {
     mode, setMode,
     messages,
     onSend, onEditAndResend, onRegenLast, onBranchFrom,
-    onApplyBlock, files,
+    onApplyBlock, onPermission, files,
     model, setModel, busy, onStop,
     customPrompt, setCustomPrompt,
     onNewChat,
@@ -103,6 +103,7 @@ window.ChatPanel = function (props) {
               t={t}
               language={language}
               onApplyBlock={(b) => onApplyBlock(b, m.id)}
+              onPermission={onPermission}
               onEdit={() => {
                 setValue(m.content);
                 onEditAndResend(m.id);

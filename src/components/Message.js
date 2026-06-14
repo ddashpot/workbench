@@ -158,7 +158,58 @@ function simpleDiff(a, b) {
   return out;
 }
 
-window.Message = function ({ msg, files, onApplyBlock, onEdit, onRegen, onBranch, t, language }) {
+function gateSignature(name, inp) {
+  if (!inp || typeof inp !== "object") return "";
+  if (inp.command) return inp.command;
+  if (inp.file_path) return inp.file_path;
+  if (inp.path) return inp.path;
+  if (inp.pattern) return inp.pattern;
+  if (inp.url) return inp.url;
+  const s = JSON.stringify(inp);
+  return s.length > 140 ? s.slice(0, 140) + "…" : s;
+}
+
+function GateCard({ msg, onPermission, language }) {
+  const allowed = msg.resolved === "allow" || msg.resolved === "allow_always";
+  const resolved = msg.resolved != null;
+  return (
+    <div className={"gate" + (resolved ? " resolved" : "")}>
+      <div className="gate-head">
+        <span>{language === "ja" ? "承認が必要" : "authorization required"}</span>
+        <span className="gate-stamp">{resolved ? (language === "ja" ? "応答済" : "resolved") : (language === "ja" ? "オペレーター待ち" : "awaiting operator")}</span>
+      </div>
+      <div className="gate-tool">
+        <span className="gate-name">{msg.tool_name}</span>
+        <span className="gate-arrow">›</span>
+        <span className="gate-sig">{gateSignature(msg.tool_name, msg.input)}</span>
+      </div>
+      {!resolved ? (
+        <div className="gate-actions">
+          <button className="gate-grant" onClick={() => onPermission(msg.permId, "allow")}>{language === "ja" ? "許可" : "grant once"}</button>
+          <button className="gate-always" onClick={() => onPermission(msg.permId, "allow_always")}>{language === "ja" ? "セッション許可" : "for session"}</button>
+          <button className="gate-deny" onClick={() => onPermission(msg.permId, "deny")}>{language === "ja" ? "拒否" : "deny"}</button>
+        </div>
+      ) : (
+        <div className={"gate-verdict " + (allowed ? "allow" : "deny")}>
+          {msg.resolved === "allow_always" ? (language === "ja" ? "許可・セッション" : "granted · session")
+            : allowed ? (language === "ja" ? "許可" : "granted")
+            : msg.resolved === "timeout" ? (language === "ja" ? "拒否・時間切れ" : "denied · timed out")
+            : (language === "ja" ? "拒否" : "denied")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.Message = function ({ msg, files, onApplyBlock, onPermission, onEdit, onRegen, onBranch, t, language }) {
+  if (msg.kind === "gate") {
+    return (
+      <div className="msg claude gate-msg">
+        <div className="avatar"><Icon name="settings" size={13} /></div>
+        <div className="body"><GateCard msg={msg} onPermission={onPermission} language={language} /></div>
+      </div>
+    );
+  }
   const m = window.modelById(msg.model);
   const mode = window.modeById(msg.mode || "ui");
   const isAssistant = msg.role === "assistant";

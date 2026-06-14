@@ -85,42 +85,76 @@ Current project state:
 ${fileSnippets}`;
 };
 
-/* Chunked streaming. claude.complete returns a final string; we fake streaming
-   by yielding ~24-char slices. Slows long outputs slightly but feels alive. */
+/* ============================================================
+   Backend bridge — single shared WebSocket to the local server
+   that wraps the `claude` CLI (agent style). Falls back to a
+   helpful message when the page is opened without the backend
+   (e.g. the static GitHub Pages showcase).
+   ============================================================ */
+window.__wbBridge = (function () {
+  let ws = null, ready = false;
+  const subs = new Set();
+  const queue = [];
+  // Only the locally-served build talks to the agent backend; the public
+  // GitHub Pages host stays a static, no-AI showcase (no WS retry loop there).
+  const hasBackend = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/.test(location.hostname);
+
+  function connect() {
+    if (!hasBackend) return;
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    try { ws = new WebSocket(`${proto}://${location.host}`); }
+    catch (_) { return; }
+    ws.onopen = () => { ready = true; const q = queue.splice(0); q.forEach((m) => ws.send(m)); emit({ type: "_bridge", state: "open" }); };
+    ws.onclose = () => { ready = false; ws = null; emit({ type: "_bridge", state: "closed" }); setTimeout(connect, 1500); };
+    ws.onerror = () => {};
+    ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } emit(m); };
+  }
+  function emit(m) { subs.forEach((fn) => { try { fn(m); } catch (_) {} }); }
+  function send(obj) {
+    const s = JSON.stringify(obj);
+    if (ws && ready) ws.send(s);
+    else { queue.push(s); connect(); }
+  }
+  function on(fn) { subs.add(fn); return () => subs.delete(fn); }
+  connect();
+  return { connect, send, on, get ready() { return ready; }, get hasBackend() { return hasBackend; } };
+})();
+
+/* Convenience senders used by the UI. */
+window.wbSendPermission = (id, decision) => window.__wbBridge.send({ type: "permission_response", id, decision });
+window.wbSetCustom = (o) => window.__wbBridge.send({ type: "set_custom", text: (o && o.text) || "", language: o && o.language, target: o && o.target });
+window.wbNewSession = () => window.__wbBridge.send({ type: "new_session" });
+window.wbStop = () => window.__wbBridge.send({ type: "stop" });
+
+/* Real streaming via the backend agent. The agent reads/edits files itself, so
+   we send only the latest user text; the CLI keeps continuity via --resume.
+   Resolves with the assistant's accumulated prose when the turn ends. */
 window.streamComplete = async function ({ systemPrompt, messages, onChunk, signal }) {
-  // Build a single prompt — claude.complete here accepts a messages array.
-  const all = [{ role: "user", content: systemPrompt + "\n\n---\n\n" + flatten(messages) }];
+  const b = window.__wbBridge;
+  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const text = lastUser && lastUser.content ? lastUser.content : "";
+  if (!text) return "";
 
-  let result;
-  try {
-    result = await window.claude.complete({ messages: all });
-  } catch (e) {
-    throw e;
+  if (!b.hasBackend) {
+    throw new Error("ローカルのAIバックエンドに接続できません（静的表示モード）。`node workbench/server/server.js` を起動してください。");
   }
-  if (typeof result !== "string") result = String(result);
 
-  // Fake stream
-  const chunkSize = 18;
-  let i = 0;
-  while (i < result.length) {
-    if (signal && signal.aborted) return;
-    const next = result.slice(i, i + chunkSize);
-    onChunk(next);
-    i += chunkSize;
-    await new Promise((r) => setTimeout(r, 14));
-  }
-  return result;
+  return await new Promise((resolve) => {
+    let acc = "";
+    let stopped = false;
+    const abortTimer = setInterval(() => {
+      if (signal && signal.aborted && !stopped) { stopped = true; b.send({ type: "stop" }); }
+    }, 200);
+    const off = b.on((m) => {
+      if (m.type === "assistant_delta") { acc += m.text; onChunk(m.text); }
+      else if (m.type === "error") { acc += (acc ? "\n\n" : "") + "⚠️ " + m.message; }
+      else if (m.type === "turn_end") { cleanup(); resolve(acc); }
+    });
+    function cleanup() { clearInterval(abortTimer); off(); }
+    b.send({ type: "prompt", text });
+  });
 };
-
-function flatten(messages) {
-  return messages
-    .map((m) => {
-      if (m.role === "user")    return `User: ${m.content}`;
-      if (m.role === "assistant") return `Assistant: ${m.content}`;
-      return m.content;
-    })
-    .join("\n\n");
-}
 
 /* Parser: extract code blocks tagged like ```html:index.html ... ``` */
 window.parseCodeBlocks = function (text) {
