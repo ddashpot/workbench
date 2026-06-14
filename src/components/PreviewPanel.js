@@ -43,6 +43,11 @@ window.PreviewPanel = function ({
     iframeRef.current?.contentWindow?.postMessage({ __wb_resetAll: true }, "*");
   }
 
+  // Run a console expression inside the live preview iframe (REPL).
+  function evalInIframe(code) {
+    iframeRef.current?.contentWindow?.postMessage({ __wb_eval: code }, "*");
+  }
+
   return (
     <div className="preview-panel">
       <div className="preview-toolbar">
@@ -80,8 +85,10 @@ window.PreviewPanel = function ({
         <button className="pt-icon-btn" onClick={onOpenExternal} title={t("open_external")}><Icon name="expand" /></button>
       </div>
 
-      {view === "preview" && (
-        <div className={"preview-stage " + (selectMode ? "in-select" : "")}>
+      <div
+        className={"preview-stage " + (selectMode ? "in-select" : "")}
+        style={{ display: view === "preview" ? undefined : "none" }}
+      >
           <div className={"device-frame " + device}>
             <iframe
               ref={iframeRef}
@@ -119,12 +126,11 @@ window.PreviewPanel = function ({
               )}
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       {view === "code" && <CodeEditor files={files} t={t} />}
 
-      {view === "console" && <ConsolePane logs={logs} clearLogs={clearLogs} t={t} />}
+      {view === "console" && <ConsolePane logs={logs} clearLogs={clearLogs} t={t} onEval={evalInIframe} />}
 
       <div className="preview-bottom">
         <span className="meta-chip">{Object.keys(files).join(" · ")}</span>
@@ -158,6 +164,23 @@ function buildSrcDoc(files) {
   });
   window.addEventListener("error", (e) => send("error", [e.message + " (" + (e.filename||"") + ":" + e.lineno + ":" + e.colno + ")"]));
   window.addEventListener("unhandledrejection", (e) => send("error", ["Unhandled: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)]));
+  // REPL: run code typed in the parent's Console tab, in this page's scope.
+  window.addEventListener("message", function(e){
+    var m = e.data || {};
+    if (m && typeof m.__wb_eval === "string") {
+      send("input", ["> " + m.__wb_eval]);
+      try {
+        var r = (0, eval)(m.__wb_eval);
+        if (r && typeof r.then === "function") {
+          r.then(function(v){ send("result", [v]); }, function(err){ send("error", [(err && (err.stack||err.message)) || String(err)]); });
+        } else if (r !== undefined) {
+          send("result", [r]);
+        }
+      } catch(err) {
+        send("error", [ (err && (err.stack || err.message)) || String(err) ]);
+      }
+    }
+  });
 })();
 </script>`;
 
@@ -320,7 +343,42 @@ function CodeEditor({ files, t }) {
   );
 }
 
-function ConsolePane({ logs, clearLogs, t }) {
+function ConsolePane({ logs, clearLogs, t, onEval }) {
+  const [val, setVal] = ppUseState("");
+  const [histIdx, setHistIdx] = ppUseState(-1);
+  const histRef = ppUseRef([]);
+  const logRef = ppUseRef(null);
+
+  ppUseEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logs.length]);
+
+  function run() {
+    const code = val.trim();
+    if (!code) return;
+    if (histRef.current[histRef.current.length - 1] !== code) histRef.current.push(code);
+    setHistIdx(-1);
+    if (onEval) onEval(code);
+    setVal("");
+  }
+  function onKey(e) {
+    const h = histRef.current;
+    if (e.key === "Enter") { e.preventDefault(); run(); }
+    else if (e.key === "ArrowUp") {
+      if (!h.length) return;
+      e.preventDefault();
+      const i = histIdx < 0 ? h.length - 1 : Math.max(0, histIdx - 1);
+      setHistIdx(i); setVal(h[i]);
+    } else if (e.key === "ArrowDown") {
+      if (histIdx < 0) return;
+      e.preventDefault();
+      const i = histIdx + 1;
+      if (i >= h.length) { setHistIdx(-1); setVal(""); }
+      else { setHistIdx(i); setVal(h[i]); }
+    }
+  }
+
   return (
     <div className="console-panel">
       <div className="c-head">
@@ -332,14 +390,25 @@ function ConsolePane({ logs, clearLogs, t }) {
         <span style={{ marginLeft: "auto" }} />
         <button onClick={clearLogs} style={{ color: "var(--fg-muted)", fontSize: 11 }}>Clear</button>
       </div>
-      <div className="c-log">
-        {logs.length === 0 && <div className="c-empty">No output yet. Run interactions in the preview.</div>}
+      <div className="c-log" ref={logRef}>
+        {logs.length === 0 && <div className="c-empty">No output yet. Type a command below or interact with the preview.</div>}
         {logs.map((l, i) => (
           <div key={i} className={"c-line " + l.kind}>
             <span className="ts">{new Date(l.ts).toLocaleTimeString()}</span>
             <span className="msg">{l.data}</span>
           </div>
         ))}
+      </div>
+      <div className="c-input">
+        <span className="c-prompt">›</span>
+        <input
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={onKey}
+          spellCheck={false}
+          placeholder={t("console_input_ph")}
+        />
+        <button onClick={run}>Run</button>
       </div>
     </div>
   );

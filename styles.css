@@ -777,9 +777,29 @@ textarea { resize: none; }
 /* console */
 .console-panel {
   background: var(--bg-0);
-  display: grid; grid-template-rows: auto 1fr;
+  display: grid; grid-template-rows: auto 1fr auto;
   min-height: 0;
 }
+.console-panel .c-line.input .msg { color: var(--fg-muted); }
+.console-panel .c-line.result .msg { color: var(--accent); }
+.console-panel .c-input {
+  display: flex; align-items: center; gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 6px var(--s-3);
+  background: var(--bg-1);
+}
+.console-panel .c-input .c-prompt { color: var(--accent); font-family: var(--font-mono); font-weight: 600; }
+.console-panel .c-input input {
+  flex: 1; min-width: 0;
+  background: transparent; border: 0; outline: 0;
+  color: var(--fg); font-family: var(--font-mono); font-size: 12px;
+}
+.console-panel .c-input input::placeholder { color: var(--fg-dim); }
+.console-panel .c-input button {
+  font-size: 11px; color: var(--fg-muted);
+  padding: 3px 10px; border-radius: var(--r-xs);
+}
+.console-panel .c-input button:hover { background: var(--bg-3); color: var(--fg); }
 .console-panel .c-head {
   height: 30px; display: flex; align-items: center; gap: var(--s-2);
   padding: 0 var(--s-3); background: var(--bg-1);
