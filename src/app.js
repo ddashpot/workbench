@@ -33,6 +33,8 @@ function App() {
   const [customPrompt, setCustomPrompt] = useState(() => localStorage.getItem("wb.customPrompt") || "");
   const [showOAuth, setShowOAuth] = useState(false);
   const [ghConnecting, setGhConnecting] = useState(false);
+  const [diskProjects, setDiskProjects] = useState([]); // [{name, mtime}]
+  const [activeProject, setActiveProject] = useState(null);
 
   // Toasts
   const [toasts, setToasts] = useState([]);
@@ -127,6 +129,9 @@ function App() {
       } else if (m.type === "permission_resolved") {
         setProject((p) => p ? { ...p, messages: (p.messages || []).map((x) =>
           x.permId === m.id && x.resolved == null ? { ...x, resolved: m.decision } : x) } : p);
+      } else if (m.type === "projects") {
+        setDiskProjects(m.list || []);
+        setActiveProject(m.active || null);
       } else if (m.type === "error") {
         toast({ kind: "error", title: "Agent", msg: m.message });
       } else if (m.type === "notice") {
@@ -135,6 +140,26 @@ function App() {
     });
     return off;
   }, []);
+
+  // ---- disk project management (multi-project) --------------------------
+  function openDiskProject(name) {
+    window.__wbBridge.send({ type: "open_project", name });
+    setActiveProject(name);
+    setProject({ name, files: {}, messages: [], versions: [], currentVersionId: null, overrides: {}, disk: true });
+    setShowGallery(false);
+    setSideOpen(null);
+    setLogs([]);
+    setIframeKey((k) => k + 1);
+  }
+  function createDiskProject(name) {
+    window.__wbBridge.send({ type: "create_project", name });
+    setActiveProject(name);
+    setProject({ name, files: {}, messages: [], versions: [], currentVersionId: null, overrides: {}, disk: true });
+    setShowGallery(false);
+    setSideOpen(null);
+    setLogs([]);
+    setIframeKey((k) => k + 1);
+  }
 
   // Mirror the layered prompt inputs to the backend (writes project CLAUDE.md).
   useEffect(() => {
@@ -475,6 +500,16 @@ function App() {
           <button className={"sb-btn mobile-only " + (mobileView === "preview" && !sideOpen ? "on" : "")} onClick={setFocusPreview} title={t("preview")}>
             <Icon name="eye" />
           </button>
+          <button
+            className={"sb-btn " + (sideOpen === "projects" ? "on" : "")}
+            onClick={() => { if (sideOpen !== "projects") window.__wbBridge.send({ type: "list_projects" }); setSideOpen(sideOpen === "projects" ? null : "projects"); }}
+            title={language === "ja" ? "プロジェクト" : "Projects"}
+          >
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <rect x="2.5" y="5.5" width="13" height="9" rx="1.5" />
+              <path d="M2.5 5.5l1.6-2.2a1 1 0 01.8-.4h3.1a1 1 0 01.8.4l1 1.4" />
+            </svg>
+          </button>
           <button className={"sb-btn " + (sideOpen === "files" ? "on" : "")} onClick={() => setSideOpen(sideOpen === "files" ? null : "files")} title={t("files")}>
             <Icon name="folder" />
           </button>
@@ -497,6 +532,16 @@ function App() {
           </button>
         </div>
 
+        {sideOpen === "projects" && (
+          <ProjectsPanel
+            language={language}
+            projects={diskProjects}
+            active={activeProject}
+            onOpen={openDiskProject}
+            onCreate={createDiskProject}
+            onClose={() => setSideOpen(null)}
+          />
+        )}
         {sideOpen === "settings" && (
           <SettingsPanel
             t={t} language={language} setLanguage={setLanguage}
@@ -573,6 +618,45 @@ function App() {
         />
       )}
       {ghConnecting && <GhConnecting language={language} />}
+    </div>
+  );
+}
+
+function ProjectsPanel({ language, projects, active, onOpen, onCreate, onClose }) {
+  const [name, setName] = useState("");
+  function submit() { const v = name.trim(); if (!v) return; onCreate(v); setName(""); }
+  return (
+    <div className="files-panel">
+      <div className="hp-head">
+        <span className="hp-title">{language === "ja" ? "プロジェクト" : "Projects"}</span>
+        <button className="fp-btn small" onClick={onClose} title="close"><Icon name="close" size={12} /></button>
+      </div>
+      <div style={{ display: "flex", gap: 6, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }}
+          placeholder={language === "ja" ? "新規プロジェクト名" : "New project name"}
+          style={{ flex: 1, minWidth: 0, background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: 4, padding: "6px 8px", color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: 12 }}
+        />
+        <button className="fp-btn primary" onClick={submit}>{language === "ja" ? "作成" : "New"}</button>
+      </div>
+      <div className="fp-body">
+        <ul className="fp-list">
+          {projects.length === 0 && <li className="fp-empty">{language === "ja" ? "プロジェクトがありません" : "No projects yet"}</li>}
+          {projects.map((p) => (
+            <li
+              key={p.name}
+              className="fp-row"
+              onClick={() => onOpen(p.name)}
+              style={p.name === active ? { borderLeft: "2px solid var(--accent)", background: "var(--accent-soft)" } : null}
+            >
+              <span className="fp-row-icon"><Icon name="folder" size={14} /></span>
+              <span className="fp-row-name">{p.name}{p.name === active && <span className="vis">active</span>}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

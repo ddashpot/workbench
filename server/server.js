@@ -28,9 +28,12 @@ const STATIC_ROOT = path.join(__dirname, "..");
 const PORT = parseInt(process.env.PORT || "4317", 10);
 // Directory the agent operates in. THIS IS WHERE FILES GET EDITED — be careful.
 // Mutable: the operator can switch the project from the UI (set_workdir).
-let WORKDIR = process.env.CLAUDE_UI_CWD
-  ? path.resolve(process.env.CLAUDE_UI_CWD)
-  : process.cwd();
+// Projects live as subfolders of PROJECTS_ROOT; WORKDIR = the active project.
+// Default (no env) = ../dd-web-builder next to the Workbench folder.
+const PROJECTS_ROOT = path.resolve(
+  process.env.CLAUDE_UI_PROJECTS || process.env.CLAUDE_UI_CWD || path.join(STATIC_ROOT, "..", "dd-web-builder")
+);
+let WORKDIR = PROJECTS_ROOT; // reassigned to the active project by ensureActive()
 let MODEL = process.env.CLAUDE_UI_MODEL || "";
 
 // Workbench's preview inlines exactly these three files (see buildSrcDoc).
@@ -103,6 +106,98 @@ ${CUSTOM ? `\n## Additional rules from the user\n${CUSTOM}\n` : ""}`;
   try { fs.writeFileSync(path.join(WORKDIR, "CLAUDE.md"), body); } catch (_) {}
 }
 
+// ---- project management ---------------------------------------------------
+const STARTER = {
+  "index.html": `<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>New project</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <h1 id="t">Hello, world.</h1>
+    <p>Edit me via chat →</p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
+`,
+  "styles.css": `body { font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+#t { font-size: 48px; }
+`,
+  "app.js": `console.log("project ready");
+`
+};
+
+function activeName() { return path.basename(WORKDIR); }
+
+function listProjects() {
+  try {
+    return fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith(".") && d.name !== "node_modules")
+      .map((d) => {
+        let mtime = 0;
+        try { mtime = fs.statSync(path.join(PROJECTS_ROOT, d.name)).mtimeMs; } catch (_) {}
+        return { name: d.name, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (_) { return []; }
+}
+
+function sendProjects() { sendUI({ type: "projects", list: listProjects(), active: activeName(), root: PROJECTS_ROOT }); }
+
+function ensureActive() {
+  let list = listProjects();
+  if (!list.length) {
+    const dir = path.join(PROJECTS_ROOT, "untitled");
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+    seedProject(dir);
+    list = listProjects();
+  }
+  WORKDIR = path.join(PROJECTS_ROOT, list[0] ? list[0].name : "untitled");
+}
+
+function seedProject(dir) {
+  for (const [name, content] of Object.entries(STARTER)) {
+    const p = path.join(dir, name);
+    try { if (!fs.existsSync(p)) fs.writeFileSync(p, content); } catch (_) {}
+  }
+}
+
+function safeProjectName(name) {
+  return String(name || "").trim().replace(/[^A-Za-z0-9._\- ]/g, "").replace(/\s+/g, "-").replace(/^-+|-+$/g, "")
+    || ("project-" + Date.now());
+}
+
+function switchTo(dir, activeProjectName) {
+  WORKDIR = dir;
+  sessionId = null;
+  allowAlways.clear();
+  if (activeChild) activeChild.kill("SIGTERM");
+  writeClaudeMd();
+  sendUI({ type: "workdir", workdir: WORKDIR });
+  sendUI({ type: "session", sessionId: null });
+  sendProjects();
+  pushFiles();
+}
+
+function createProject(name) {
+  const safe = safeProjectName(name);
+  const dir = path.join(PROJECTS_ROOT, safe);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { sendUI({ type: "error", message: e.message }); return; }
+  seedProject(dir);
+  switchTo(dir, safe);
+}
+
+function openProject(name) {
+  const dir = path.join(PROJECTS_ROOT, path.basename(String(name || "")));
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) { sendUI({ type: "error", message: "No such project: " + name }); return; }
+  switchTo(dir, path.basename(dir));
+}
+
 // ---- static file serving --------------------------------------------------
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -154,6 +249,7 @@ function sendUI(obj) { if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringi
 wss.on("connection", (socket) => {
   ws = socket;
   sendUI({ type: "ready", workdir: WORKDIR, model: MODEL || "default", sessionId });
+  sendProjects();
   pushFiles(); // mirror whatever is already on disk
 
   socket.on("message", (raw) => {
@@ -173,6 +269,9 @@ wss.on("connection", (socket) => {
         sendUI({ type: "model", model: MODEL || "default" });
         break;
       case "set_workdir": setWorkdir(msg.path); break;
+      case "list_projects": sendProjects(); break;
+      case "create_project": createProject(msg.name); break;
+      case "open_project": openProject(msg.name); break;
       case "set_custom":
         CUSTOM = msg.text || "";
         if (msg.language) LANG = msg.language;
@@ -379,6 +478,7 @@ function stringifyContent(content) {
 }
 
 // ---- go -------------------------------------------------------------------
+ensureActive();
 writeClaudeMd();
 server.listen(PORT, () => {
   console.log(`\n  Workbench (Claude Code engine)`);
