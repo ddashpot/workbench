@@ -29,3 +29,29 @@ npx serve .
 # または
 python -m http.server 8000
 ```
+
+## ローカルで Claude Code エンジンを動かす（実 AI バックエンド）
+`server/server.js` は、ブラウザの UI を本物の `claude` CLI に橋渡しするローカル Node サーバ。
+プロンプトごとに `claude -p ... --output-format stream-json` をプロジェクトディレクトリ内でエージェントとして起動し、
+特権的なツール使用（ファイル編集など）はすべて UI 上の人手承認ゲート（`permission-mcp.js`）を通す。
+編集後はプロジェクトの `index.html` / `styles.css` / `app.js` をスナップショットしてプレビュー・コードに反映する。
+
+必要なもの: Node.js (>=18)、ログイン済みの Claude Code CLI（または `ANTHROPIC_API_KEY`）。
+
+```
+cd server
+npm install
+node server.js
+# → http://localhost:4317 をブラウザで開く
+```
+
+主な環境変数:
+- `PORT`（既定 `4317`）
+- `CLAUDE_UI_PROJECTS`：プロジェクト置き場（既定は `../dd-web-builder`）
+- `CLAUDE_UI_MODEL`：使用モデル（未指定ならアカウント既定）
+
+### 動作確認（検証済み）
+ローカル起動して WebSocket 経由でエンドツーエンドに確認済み:
+- 静的UI配信（`/`, `styles.css`, `src/app.js`）と `..` パストラバーサルの 404 ブロック
+- プロンプト実行：`claude` 起動 → Read/Edit → ストリーミング受信 → `result`
+- 承認ゲート：許可で編集実行・ディスク反映＋プレビュー更新、拒否でツールをブロック（ファイル不変）
